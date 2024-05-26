@@ -1,0 +1,7 @@
+name: DoubleJump
+version: '1.0'
+main: me.itzjustsamu.doublejump.DoubleJump
+api-version: '1.13'
+authors: [ItzJustSamu]
+description: DoubleJump per cooldown
+website: samu.eu.org
