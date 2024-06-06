@@ -8,30 +8,46 @@ import org.bukkit.GameMode;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.util.Vector;
 
 import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
 
 public class JumpListener implements Listener {
-    private final DoubleJump plugin;
-    private final Map<UUID, Boolean> Jumped = new HashMap<>();
-    private final Map<Player, Long> Cooldown_Map = new HashMap<>();
+    private final HashMap<Player, Boolean> Cooldown = new HashMap<>();
+    private final HashMap<Player, Long> Cooldown_Map = new HashMap<>();
+    private final HashMap<Player, Boolean> Jumped = new HashMap<>();
+    private final Plugin plugin;
+    private final String cooldownMessage = "&cCooldown: {remaining_time} seconds";
 
-    public JumpListener(DoubleJump plugin) {
+    public JumpListener(Plugin plugin) {
         this.plugin = plugin;
     }
 
     @EventHandler
-    public void onMove(final PlayerMoveEvent event) {
+    public void onDamage(EntityDamageEvent event) {
+        if (event.isCancelled() || !(event.getEntity() instanceof Player)) {
+            return;
+        }
+
+        Player player = (Player) event.getEntity();
+
+        if (event.getCause() == EntityDamageEvent.DamageCause.FALL && Jumped.getOrDefault(player, false)) {
+            event.setCancelled(true);
+            Jumped.put(player, false);
+        }
+    }
+
+    @EventHandler
+    public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
 
-        if (player.getGameMode() == GameMode.CREATIVE) {
+        if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
             return;
         }
 
@@ -42,12 +58,14 @@ public class JumpListener implements Listener {
     public void onPlayerToggleFlight(PlayerToggleFlightEvent event) {
         Player player = event.getPlayer();
 
-        if (player.getGameMode() == GameMode.CREATIVE) {
+        if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
             return;
         }
 
+        // Check if the player is on cooldown for double jump
         if (Cooldown_Map.containsKey(player) && System.currentTimeMillis() < Cooldown_Map.get(player)) {
-            if (!Jumped.getOrDefault(player.getUniqueId(), false)) {
+            // If the player hasn't double jumped, cancel the event and disable flight mode
+            if (!Jumped.getOrDefault(player, false)) {
                 event.setCancelled(true);
                 player.setAllowFlight(false);
             }
@@ -57,49 +75,57 @@ public class JumpListener implements Listener {
     }
 
     private void doubleJump(Player player) {
-        double jumpHeight = 1.0; // Example jump height value
-        double upwardVelocity = 0.5; // Example upward velocity value
+        // Set cooldown for the double jump
+        // Cooldown time in milliseconds
+        long cooldownTime = 5000L;
+        Cooldown_Map.put(player, System.currentTimeMillis() + cooldownTime);
 
-        Cooldown_Map.put(player, System.currentTimeMillis() + Cooldown_Time.getValue());
-
+        // Calculate the direction for the double jump
         Vector direction = player.getLocation().getDirection().normalize();
+
+        // Multiply the normalized direction vector by the jump height to get the final velocity
+        // Default jump height
+        double jumpHeight = 1.5;
         Vector velocity = direction.multiply(jumpHeight);
-        velocity.setY(upwardVelocity); // Apply upward force
+        velocity.setY(jumpHeight); // Set vertical jump height
 
-        player.setVelocity(velocity);
         player.setAllowFlight(true);
-        player.setFlying(false);
-        player.setFallDistance(0); // Prevent fall damage
 
-        // Allow player to move after jump
-        Bukkit.getScheduler().runTaskLater(plugin, () -> player.setAllowFlight(false), 20L);
+        // Set the player's velocity for the double jump
+        player.setVelocity(velocity);
 
+        // Schedule task to disable flight after a short delay
+        Bukkit.getScheduler().runTaskLater(plugin, () -> player.setAllowFlight(false), 10L); // Delay of 0.5 seconds (10 ticks)
+
+        // Display remaining cooldown time as an action bar message
         long remainingTime = (Cooldown_Map.get(player) - System.currentTimeMillis()) / 1000L;
         sendActionBar(player, remainingTime);
 
+        // Set HasDoubleJumped to true only if the player is in the air
         if (player.getLocation().getY() % 1 != 0) {
-            Jumped.put(player.getUniqueId(), true);
+            Jumped.put(player, true);
         } else {
-            Jumped.put(player.getUniqueId(), false);
+            // Reset HasDoubleJumped to false if the player doesn't have a jump level
+            Jumped.put(player, false);
         }
     }
 
     @EventHandler
-    public void onSneak(final PlayerToggleSneakEvent event) {
+    public void onSneak(PlayerToggleSneakEvent event) {
         Player player = event.getPlayer();
 
         if (player.getGameMode() == GameMode.CREATIVE) {
             return;
         }
 
-        if (player.getLocation().getY() % 1 == 0 && Cooldown_Map.get(player) != null && System.currentTimeMillis() >= Cooldown_Map.get(player)) {
-            Cooldown_Map.put(player, System.currentTimeMillis());
+        if (player.getLocation().getY() % 1 == 0 && Cooldown.get(player) != null && !Cooldown.get(player)) {
+            Cooldown.put(player, true);
             player.setVelocity(new Vector());
         }
     }
 
     private void sendActionBar(Player player, long remainingTime) {
-        if (isLegacyVersion()) {
+        if (isOldVersion()) {
             sendActionBarLegacy(player, remainingTime);
         } else {
             sendActionBarModern(player, remainingTime);
@@ -116,7 +142,7 @@ public class JumpListener implements Listener {
                 if (timeLeft > 0) {
                     ticks++;
                     if (ticks % 100 == 0) { // 100 ticks = 5 seconds
-                        String actionBarMessage = ChatColor.translateAlternateColorCodes('&', Cooldown_Message.getValue())
+                        String actionBarMessage = ChatColor.translateAlternateColorCodes('&', cooldownMessage)
                                 .replace("{remaining_time}", String.valueOf(timeLeft));
                         player.sendMessage(ChatColor.translateAlternateColorCodes('&', actionBarMessage));
                         ticks = 0; // Reset ticks count
@@ -133,45 +159,28 @@ public class JumpListener implements Listener {
     private void sendActionBarModern(Player player, long remainingTime) {
         new BukkitRunnable() {
             long timeLeft = remainingTime;
+            long ticks = 0;
 
             @Override
             public void run() {
                 if (timeLeft > 0) {
-                    String actionBarMessage = ChatColor.translateAlternateColorCodes('&', Cooldown_Message.getValue())
-                            .replace("{remaining_time}", String.valueOf(timeLeft));
-                    player.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(actionBarMessage));
-                    timeLeft--;
+                    ticks++;
+                    if (ticks % 20 == 0) { // 20 ticks = 1 second
+                        String actionBarMessage = ChatColor.translateAlternateColorCodes('&', cooldownMessage)
+                                .replace("{remaining_time}", String.valueOf(timeLeft));
+                        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(actionBarMessage));
+                        timeLeft--;
+                    }
                 } else {
-                    player.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(""));
-                    cancel(); // Stop the task when the cooldown ends
+                    player.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(""));
+                    cancel();
                 }
             }
-        }.runTaskTimer(plugin, 0L, 20L); // Update every second
+        }.runTaskTimer(plugin, 0L, 1L); // Update every tick
     }
 
-    private boolean isLegacyVersion() {
-        String[] versionParts = Bukkit.getBukkitVersion().split("-")[0].split("\\.");
-        try {
-            int major = Integer.parseInt(versionParts[0]);
-            int minor = Integer.parseInt(versionParts[1]);
-            return major == 1 && minor < 14; // ActionBar was introduced in 1.14
-        } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
-            // Unable to determine version, assume modern
-            return false;
-        }
-    }
-
-    private static class Cooldown_Message {
-        static String getValue() {
-            // Implement the logic to get the cooldown message
-            return "&aCooldown: {remaining_time}s"; // Placeholder
-        }
-    }
-
-    private static class Cooldown_Time {
-        static long getValue() {
-            // Implement the logic to get the cooldown time value
-            return 5000L; // Placeholder
-        }
+    public static boolean isOldVersion() {
+        String[] packageNameParts = Bukkit.getServer().getClass().getPackage().getName().split("\\.");
+        return packageNameParts.length >= 4 && (packageNameParts[3].equals("v1_8_R3") || packageNameParts[3].startsWith("v1_8"));
     }
 }
